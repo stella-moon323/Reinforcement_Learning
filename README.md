@@ -2,8 +2,8 @@
 
 - [ ] 1. DQN
   - [x] 1-1. DQN
-  - [ ] 1-2. Double DQN
-  - [ ] 1-3. Dueling Network
+  - [x] 1-2. Double DQN
+  - [x] 1-3. Dueling Network
   - [ ] 1-4. Multistep Learning
   - [ ] 1-5. Prioritized Experience Replay
   - [ ] 1-6. NosiyNet
