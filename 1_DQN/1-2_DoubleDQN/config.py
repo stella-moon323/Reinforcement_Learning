@@ -16,7 +16,7 @@ class Config:
 
 class CommonConfig:
     def __init__(self):
-        self.name = "DQN"
+        self.name = "DoubleDQN"
 
 
 class LogConfig:
@@ -48,6 +48,7 @@ class AgentConfig:
         self.batch_size = 32
         self.gamma = 0.99
         self.use_visualize = True
+        self.update_target_net_interval = 2
 
 
 class MemoryConfig:
