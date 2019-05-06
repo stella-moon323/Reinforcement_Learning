@@ -4,9 +4,9 @@
   - [x] 1-1. DQN
   - [x] 1-2. Double DQN
   - [x] 1-3. Dueling Network
-  - [ ] 1-4. Multistep Learning
-  - [ ] 1-5. Prioritized Experience Replay
-  - [ ] 1-6. NosiyNet
+  - [x] 1-4. Multistep Learning
+  - [x] 1-5. Prioritized Experience Replay
+  - [x] 1-6. NosiyNet
   - [ ] 1-7. Distributional RL
   - [ ] 1-8. Rainbow
 
