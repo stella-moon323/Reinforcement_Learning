@@ -8,10 +8,10 @@
   - [x] 1-5. Prioritized Experience Replay
   - [x] 1-6. NosiyNet
   - [x] 1-7. Distributional RL
-  - [ ] 1-8. Rainbow
+  - [x] 1-8. Rainbow
 
 - [ ] 2. Policy Gradient(PG)
-  - [ ] 2-1. REINFORCE
+  - [x] 2-1. REINFORCE
   - [ ] 2-2. Actor Critic
   - [ ] 2-3. Advantage Actor Critic(A2C)
   - [ ] 2-4. Generalized Advantage Estimation(GAE)

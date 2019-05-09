@@ -1,5 +1,4 @@
 import gym
-import random
 import numpy as np
 import torch
 import torchsummary
@@ -22,7 +21,7 @@ class Agent:
         self.logger.info("Action nums: {}".format(self.num_actions))
 
         # モデル定義
-        self.online_net = QNet(self.num_observations, self.num_actions, config.model.hidden_num, config.model.atom_nums)
+        self.online_net = QNet(self.num_observations, self.num_actions, config.model.hidden_num)
         self.logger.debug(self.online_net)
         self.logger.debug('モデルパラメータ数: {}'.format(sum([p.data.nelement() for p in self.online_net.parameters()])))
         torchsummary.summary(self.online_net, tuple([self.num_observations]), device="cpu")
@@ -46,12 +45,7 @@ class Agent:
         self.logger.info("Use devide: {}".format(config.model.device))
         self.online_net.to(config.model.device)
 
-        self.epsilon = config.agent.epsilon_start
         self.memory = Memory(config)
-
-        # 報酬の分布計算用
-        self.dz = float(config.agent.v_max - config.agent.v_min) / (config.model.atom_nums - 1)
-        self.z = torch.Tensor([config.agent.v_min + i * self.dz for i in range(config.model.atom_nums)])
 
     def start(self):
         step_avg_last10 = np.zeros(10)    # 直近のStep数
@@ -59,6 +53,7 @@ class Agent:
         complete_episode = 0              # 連続成功回数
         for episode in range(self.config.agent.max_episode):
             self.logger.debug("Episode start: {}".format(episode + 1))
+            self.memory.clear()
 
             state = self.env.reset()
             episode_reward = 0
@@ -87,22 +82,17 @@ class Agent:
 
                 self.logger.debug("    - Reward: {}, Done: {}".format(reward, done))
                 episode_reward += reward
-                self.push_memory(state, next_state, action, reward, mask)
+                self.push_memory(state, action, reward, mask)
                 state = next_state
 
-                if len(self.memory) > self.config.agent.batch_size:
-                    # モデル更新
-                    loss = self.train_model()
-                    loss_avg.update(loss, self.config.agent.batch_size)
-
                 if done or (step == (self.config.agent.max_step - 1)):
-                    # ε-greedy更新
-                    self.epsilon -= self.config.agent.epsilon_decay
-                    self.epsilon = max(self.epsilon, self.config.agent.epsilon_min)
-
                     step_avg_last10 = np.hstack((step_avg_last10[1:], step + 1))
                     reward_avg_last10 = np.hstack((reward_avg_last10[1:], episode_reward))
                     break
+
+            # モデル更新
+            loss = self.train_model()
+            loss_avg.update(loss, 1)
 
             self.logger.info("Episode [{:3}]: Step:{}(Avg:{}), Reward:{:.3f}, loss(avg):{:.6f}".format(
                 episode + 1, step + 1, step_avg_last10.mean(), episode_reward, loss_avg.avg))
@@ -111,7 +101,6 @@ class Agent:
                 self.tbx_writer.add_scalar("log/step", float(step_avg_last10.mean()), episode + 1)
                 self.tbx_writer.add_scalar("log/reward", float(reward_avg_last10.mean()), episode + 1)
                 self.tbx_writer.add_scalar("log/loss", float(loss_avg.avg), episode + 1)
-                self.tbx_writer.add_scalar("log/epsilon", float(self.epsilon), episode + 1)
 
             if complete_episode >= 10:
                 # 10回連続成功で終了
@@ -123,75 +112,39 @@ class Agent:
             self.tbx_writer.close()
 
     def get_action(self, state):
-        if self.epsilon <= np.random.uniform(0, 1):
-            state_var = torch.Tensor(state).unsqueeze(0).to(self.config.model.device)
-            with torch.no_grad():
-                out = self.online_net(state_var).detach().squeeze(0)
-                z_space = self.z.repeat(self.num_actions, 1)
-                Q = torch.sum(out * z_space, dim=1)
-                action = torch.argmax(Q).item()
-        else:
-            action = random.randrange(self.num_actions)
+        state_var = torch.Tensor(state).unsqueeze(0).to(self.config.model.device)
+        with torch.no_grad():
+            policy = self.online_net(state_var)[0].detach().numpy()
+            action = np.random.choice(self.num_actions, 1, p=policy)[0]
+
         return action
 
-    def push_memory(self, state, next_state, action, reward, mask):
+    def push_memory(self, state, action, reward, mask):
         action_one_hot = np.zeros(self.num_actions)
         action_one_hot[action] = 1
-        self.memory.push(state, next_state, action_one_hot, reward, mask)
-
-    def get_m(self, rewards, masks, prob_next_states_action):
-        rewards = rewards.numpy()
-        masks = masks.numpy()
-        prob_next_states_action = prob_next_states_action.detach().numpy()
-        m_prob = np.zeros([self.config.agent.batch_size, self.config.model.atom_nums], dtype=np.float32)
-
-        batch_id = range(self.config.agent.batch_size)
-        gamma = self.config.agent.gamma
-        v_max = self.config.agent.v_max
-        v_min = self.config.agent.v_min
-        for j in range(self.config.model.atom_nums):
-            tz = np.clip(rewards + masks * gamma * (v_min + j * self.dz), v_min, v_max)
-            bj = (tz - v_min) / self.dz
-
-            lj = np.floor(bj).astype(np.int64)
-            uj = np.ceil(bj).astype(np.int64)
-            blj = (bj - lj)
-            buj = (uj - bj)
-
-            m_prob[batch_id, lj[batch_id]] += ((1 - masks) + masks *
-                                               (prob_next_states_action[batch_id, j])) * buj[batch_id]
-            m_prob[batch_id, uj[batch_id]] += ((1 - masks) + masks *
-                                               (prob_next_states_action[batch_id, j])) * blj[batch_id]
-
-        return torch.tensor(m_prob)
+        self.memory.push(state, action_one_hot, reward, mask)
 
     def train_model(self):
-        batch = self.memory.sample(self.config.agent.batch_size)
+        batch = self.memory.sample()
         device = self.config.model.device
         states = torch.Tensor(np.stack(batch.state)).to(device)
-        next_states = torch.Tensor(np.stack(batch.next_state)).to(device)
         actions = torch.Tensor(batch.action).float().to(device)
         rewards = torch.tensor(batch.reward).float().to(device)
         masks = torch.Tensor(batch.mask).to(device)
 
-        # 教師信号の生成
-        self.online_net.eval()
-        z_space = self.z.repeat(self.config.agent.batch_size, self.num_actions, 1)
-        prob_next_states = self.online_net(next_states)
-        Q_next_state = torch.sum(prob_next_states * z_space, 2)
-        next_actions = torch.argmax(Q_next_state, 1)
-        prob_next_states_action = torch.stack([prob_next_states[i, action, :] for i, action in enumerate(next_actions)])
-
-        m_prob = self.get_m(rewards, masks, prob_next_states_action)
-        m_prob = (m_prob / torch.sum(m_prob, dim=1, keepdim=True)).detach()
-        expand_dim_action = torch.unsqueeze(actions, -1)
-        p = torch.sum(self.online_net(states) * expand_dim_action.float(), dim=1)
+        returns = torch.zeros_like(rewards)
+        running_return = 0
+        for t in reversed(range(len(rewards))):
+            running_return = rewards[t] + self.config.agent.gamma * running_return * masks[t]
+            returns[t] = running_return
 
         # パラメータ更新
         self.online_net.train()
         with torch.autograd.detect_anomaly():
-            loss = -torch.sum(m_prob * torch.log(p + 1e-20), 1)
-            loss = loss.mean()
+            policies = self.online_net(states)
+            policies = policies.view(-1, self.num_actions)
+            log_policies = (torch.log(policies) * actions.detach()).sum(dim=1)
+            loss = (-log_policies * returns).sum()
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
